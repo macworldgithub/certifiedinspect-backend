@@ -63,4 +63,4 @@ const create_account = async (req, res) => {
   }
 };
 
-module.exports = { request_to_create_account };
+module.exports = { request_to_create_account, create_account };
