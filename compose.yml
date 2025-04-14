@@ -1,0 +1,10 @@
+services:
+  mongo:
+    image: mongo:5
+    container_name: mongo-container
+    ports:
+      - "3200:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: anas
+      MONGO_INITDB_ROOT_PASSWORD: "123"
+      MONGO_INITDB_DATABASE: certifiedinspect
