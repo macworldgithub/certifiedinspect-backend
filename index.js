@@ -4,6 +4,8 @@ const app = express();
 const port = 5000;
 const morgan = require("morgan");
 const auth = require("./Routes/auth");
+import { connectRedis } from "./redisClient.js";
+await connectRedis();
 
 // Enable JSON body parsing
 app.use(express.json());

@@ -8,3 +8,19 @@ services:
       MONGO_INITDB_ROOT_USERNAME: anas
       MONGO_INITDB_ROOT_PASSWORD: "123"
       MONGO_INITDB_DATABASE: certifiedinspect
+    volumes:
+      - "D:/Certified Inspect Data:/data/db"
+
+  redis:
+    image: redis:7
+    container_name: redis-container
+    ports:
+      - "6379:6379"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    volumes:
+      - "D:/Certified Inspect Data/redis:/data"
