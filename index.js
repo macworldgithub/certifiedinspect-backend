@@ -7,7 +7,8 @@ const auth = require("./Routes/auth");
 const inspectionRoutes = require('./Routes/inspection');
 const cron = require("node-cron");
 const InspectionService = require("./Services/Inspection");
-
+const swaggerUi = require("swagger-ui-express");
+const swaggerSpec = require("./swagger"); // path to your swagger.js file
 
 
 const { connectRedis } = require('./Database/Redisconnection');
@@ -28,10 +29,11 @@ app.use("/v1/auth", auth);
 
 app.use('/v1/inspection', inspectionRoutes);
 
-// cron.schedule("*/10 * * * *", async () => {
-//   console.log("Retrying failed inspections...");
-//   await InspectionService.retryFailedInsertions();
-// });
+cron.schedule("*/2 * * * *", async () => {
+  console.log("Retrying failed inspections...");
+  await InspectionService.retryFailedInsertions();
+});
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.listen(port, () => {
   console.log(`Server is running at ${port}`);

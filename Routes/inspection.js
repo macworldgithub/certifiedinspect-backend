@@ -9,6 +9,7 @@ const upload = multer({ storage });
 
 router.post("/submit", upload.array("images", 17), async (req, res) => {
   try {
+    
     const images = Array.from({ length: 17 }).map((_, i) => {
       const file = req.files[i];
       const title = req.body[`title_${i}`];
@@ -33,6 +34,30 @@ router.post("/submit", upload.array("images", 17), async (req, res) => {
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 });
+
+router.put("/update/:id", upload.array("images", 17), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const images = req.files.map((file, index) => ({
+      title: req.body[`title_${index}`] || null,
+      type: req.body[`type_${index}`] === 'true',
+      buffer: file.buffer,
+    }));
+
+    const result = await InspectionService.updateInspection(id, {
+      user_id: parseInt(req.body.user_id) || null, // Optional
+      vin: req.body.vin,
+      images,
+    });
+
+    return res.status(result.success ? 200 : 500).json(result);
+  } catch (error) {
+    console.error("Update Route Error:", error);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+
 
 module.exports = router;
 

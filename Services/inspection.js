@@ -148,6 +148,79 @@ const InspectionService = {
       await unlinkFile(TEMP_FILE_PATH);
     }
   },
+  async updateInspection(id, data) {
+    try {
+      console.log(id)
+      console.log(data)
+      await validationSchema.validate(data, { abortEarly: false });
+
+      const existingInspection = await UserInspection.findById(id);
+      if (!existingInspection) {
+        return { success: false, message: "Inspection not found." };
+      }
+
+      // Update fields
+      existingInspection.vehicle_vin = data.vin || existingInspection.vehicle_vin;
+      existingInspection.updated_at = new Date();
+
+      await existingInspection.save();
+
+      const imageDocs = [];
+
+      const base_url = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
+
+      for (let i = 0; i < 17; i++) {
+        const img = data.images[i];
+        if (!img?.buffer) continue;
+
+        const fileName = `${uuidv4()}.jpg`;
+        const imgKey = `inspections/${existingInspection._id}/${fileName}`;
+        const uploadCommand = new PutObjectCommand({
+          Bucket: process.env.AWS_BUCKET_NAME,
+          Key: imgKey,
+          Body: img.buffer,
+          ContentType: "image/jpg",
+          ACL: "public-read"
+        });
+
+        await s3.send(uploadCommand);
+
+        imageDocs.push({
+          id: i + 1,
+          user_inspection_id: existingInspection.id,
+          image_title: img?.title || null,
+          image_type: img?.type ?? null,
+          image_src: imgKey,
+          created_at: new Date(),
+          updated_at: new Date()
+        });
+      }
+
+      if (imageDocs.length > 0) {
+        await UserInspectionImage.deleteMany({ user_inspection_id: existingInspection.id });
+        await UserInspectionImage.insertMany(imageDocs);
+      }
+
+      await redisClient.set(`inspection:${data.vin}`, JSON.stringify({ success: true }));
+
+      return {
+        success: true,
+        message: "Inspection updated successfully",
+        inspection_id: existingInspection._id,
+        base_url,
+        uploaded_images: imageDocs.map(doc => ({
+          id: doc.id,
+          title: doc.image_title,
+          type: doc.image_type,
+          url: `${base_url}${doc.image_src}`,
+        }))
+      };
+
+    } catch (error) {
+      console.error("Update Service Error:", error);
+      return { success: false, message: "Failed to update inspection. Please try again." };
+    }
+  },
 };
 
 module.exports = InspectionService;
