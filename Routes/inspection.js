@@ -124,9 +124,10 @@ router.put("/update/:id", upload.array("images", 17), async (req, res) => {
 
     const images = req.files.map((file, index) => ({
       title: req.body[`title_${index}`] || null,
-      type: req.body[`type_${index}`] === 'true',
+      type: parseInt(req.body[`type_${index}`]) || null,
       buffer: file.buffer,
     }));
+    
 
     const body = {
       user_id: parseInt(req.body.user_id) || null,
