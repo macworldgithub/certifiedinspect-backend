@@ -1,16 +1,18 @@
-// Service/Inspection.js
 
-// Service/Inspection.js
-const fs = require("fs");
 const path = require("path");
+const fs = require("fs");
 const util = require("util");
-const yup = require("yup");
 const { v4: uuidv4 } = require("uuid");
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
-const UserInspection = require("../Schema/Inspections/UserInspectionSchema");
-const UserInspectionImage = require("../Schema/Inspections/UserInspectionImageSchema");
+const pool = require("../Database/DatabaseConnecttion");
 const { redisClient } = require("../Database/Redisconnection");
+
 require("dotenv").config({ path: path.resolve(__dirname, '../.env') });
+
+const TEMP_FILE_PATH = path.join(__dirname, "../temp/failed_inspections.json");
+const writeFile = util.promisify(fs.writeFile);
+const unlinkFile = util.promisify(fs.unlink);
+const readFile = util.promisify(fs.readFile);
 
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
@@ -20,82 +22,46 @@ const s3 = new S3Client({
   }
 });
 
-const writeFile = util.promisify(fs.writeFile);
-const unlinkFile = util.promisify(fs.unlink);
-const readFile = util.promisify(fs.readFile);
-const TEMP_FILE_PATH = path.join(__dirname, "../temp/failed_inspections.json");
-
-const validationSchema = yup.object().shape({
-  user_id: yup.number().required(),
-  vin: yup.string().required(),
-  images: yup.array().of(
-    yup.object().shape({
-      title: yup.string(),
-      type: yup.boolean(),
-      buffer: yup.mixed()
-    })
-  )
-});
-
 const InspectionService = {
   async createInspection(data) {
+    const connection = await pool.getConnection();
     try {
-      // await validationSchema.validate(data, { abortEarly: false });
-      console.log("data",data)
-      const inspection = new UserInspection({
-        user_id: data.user_id,
-        inspect_id: uuidv4(),
-        status: data.status ?? true,
-        is_paid: data.is_paid ?? false,
-        vehicle_year: data.vehicle_year,
-        vehicle_make: data.vehicle_make,
-        vehicle_model: data.vehicle_model,
-        vehicle_vin: data.vin,
-        vehicle_plate_no: data.vehicle_plate_no,
-        build_date: data.build_date,
-        comp_date: data.comp_date,
-        no_of_keys: data.no_of_keys ?? true,
-        servicebook_present: data.servicebook_present,
-        servicehistory_present: data.servicehistory_present,
-        last_service_date: data.last_service_date,
-        registration_expiry: data.registration_expiry,
-        last_mileage: data.last_mileage,
-        front_wheel_d: data.front_wheel_d,
-        rear_wheel_d: data.rear_wheel_d,
-        cond_front_left: data.cond_front_left,
-        cond_front_right: data.cond_front_right,
-        cond_rear_right: data.cond_rear_right,
-        cond_rear_left: data.cond_rear_left,
-        cond_spare: data.cond_spare,
-        transmission: data.transmission,
-        body_type: data.body_type,
-        odometer: data.odometer,
-        fuel_type: data.fuel_type,
-        drive_train: data.drive_train,
-        color: data.color,
-        road_test: data.road_test,
-        road_test_comments: data.road_test_comments,
-        general_comments: data.general_comments,
-        is_pdf_generated: data.is_pdf_generated ?? false,
-        is_locked: data.is_locked ?? false,
-        locked_by: data.locked_by,
-        approved_by: data.approved_by,
-        approved_on: data.approved_on,
-        report_date: data.report_date,
-        inspector_notes: data.inspector_notes,
-        created_at: new Date(),
-        updated_at: new Date(),
-        deleted_at: data.deleted_at,
-        page_status: data.page_status ?? false
-      });
-      
-      console.log(inspection)
+      await connection.beginTransaction();
 
-      const savedInspection = await inspection.save();
+      const inspect_id = uuidv4();
+
+      const [inspectionResult] = await connection.execute(
+        `INSERT INTO user_inspections (
+          inspect_id, user_id, status, is_paid, vehicle_year, vehicle_make, vehicle_model,
+          vehicle_vin, vehicle_plate_no, build_date, comp_date, no_of_keys, servicebook_present,
+          servicehistory_present, last_service_date, registration_expiry, last_mileage, front_wheel_d,
+          rear_wheel_d, cond_front_left, cond_front_right, cond_rear_right, cond_rear_left,
+          cond_spare, transmission, body_type, odometer, fuel_type, drive_train, color, road_test,
+          road_test_comments, general_comments, is_pdf_generated, is_locked, locked_by, approved_by,
+          approved_on, report_date, inspector_notes, created_at, updated_at, deleted_at, page_status
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?
+        )`,
+        [
+          inspect_id, data.user_id, data.status ?? true, data.is_paid ?? false,
+          data.vehicle_year, data.vehicle_make, data.vehicle_model, data.vin,
+          data.vehicle_plate_no, data.build_date, data.comp_date,
+          data.no_of_keys ?? true, data.servicebook_present, data.servicehistory_present,
+          data.last_service_date, data.registration_expiry, data.last_mileage,
+          data.front_wheel_d, data.rear_wheel_d, data.cond_front_left,
+          data.cond_front_right, data.cond_rear_right, data.cond_rear_left,
+          data.cond_spare, data.transmission, data.body_type, data.odometer,
+          data.fuel_type, data.drive_train, data.color, data.road_test,
+          data.road_test_comments, data.general_comments, data.is_pdf_generated ?? false,
+          data.is_locked ?? false, data.locked_by, data.approved_by, data.approved_on,
+          data.report_date, data.inspector_notes, data.deleted_at, data.page_status ?? false
+        ]
+      );
+
+      const insertedId = inspectionResult.insertId;
+      const base_url = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
 
       const imageDocs = [];
-
-      const base_url = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
 
       for (let i = 0; i < data.images.length; i++) {
         const img = data.images[i];
@@ -103,7 +69,7 @@ const InspectionService = {
 
         if (img?.buffer) {
           const fileName = `${uuidv4()}.jpg`;
-          imgKey = `inspections/${savedInspection._id}/${fileName}`;
+          imgKey = `inspections/${insertedId}/${fileName}`;
           const uploadCommand = new PutObjectCommand({
             Bucket: process.env.AWS_BUCKET_NAME,
             Key: imgKey,
@@ -114,48 +80,67 @@ const InspectionService = {
           await s3.send(uploadCommand);
         }
 
-        imageDocs.push({
-          id: i + 1,
-          user_inspection_id: savedInspection.inspect_id,
-          image_title: img?.title || null,
-          image_type: img?.type ?? null,
-          image_src: imgKey,
-          created_at: new Date(),
-          updated_at: new Date()
-        });
+        imageDocs.push([
+          inspect_id,
+          img?.title || null,
+          img?.type ?? null,
+          imgKey ? `${base_url}${imgKey}` : null,
+          new Date(),
+          new Date(),
+          null
+        ]);
       }
 
-      await UserInspectionImage.insertMany(imageDocs);
+      if (imageDocs.length > 0) {
+        await connection.query(
+          `INSERT INTO user_inspection_images (user_inspection_id, image_title, image_type, image_src, created_at, updated_at, deleted_at) VALUES ?`,
+          [imageDocs]
+        );
+      }
 
-      await redisClient.set(`inspection:${data.vin}`, JSON.stringify({ success: true }));
+      await connection.commit();
+      await connection.release();
+
+      // await redisClient.set(`inspection:${data.vin}`, JSON.stringify({ success: true }));
+      await redisClient.set(`inspection:${inspect_id}`, JSON.stringify({ success: true }));
+
 
       return {
         success: true,
         message: "You will be notified shortly",
-        inspection_id: savedInspection._id,
+        inspection_id: insertedId,
         base_url,
-        uploaded_images: imageDocs.map(doc => ({
-          id: doc.id,
-          title: doc.image_title,
-          type: doc.image_type,
-          url: doc.image_src ? `${base_url}${doc.image_src}` : null,
+        uploaded_images: imageDocs.map((doc, idx) => ({
+          id: idx + 1,
+          title: doc[1],
+          type: doc[2],
+          url: doc[3] ? `${doc[3]}` : null,
         }))
       };
-
     } catch (error) {
-      console.error("Service Error:", error);
+      await connection.rollback();
+      connection.release();
+      console.error("MySQL Inspection Insert Error:", error);
+
       const fallbackData = {
         ...data,
-        time: new Date().toISOString(),
+        inspect_id,
+
+        time: new Date().toISOString()
       };
+      // const fallbackData = {
+      //   ...data,
+      //   
+
+      //   time: new Date().toISOString()
+      // };
 
       let tempData = [];
       if (fs.existsSync(TEMP_FILE_PATH)) {
         const fileContent = await readFile(TEMP_FILE_PATH, "utf8");
         try {
           tempData = JSON.parse(fileContent || "[]");
-        } catch (parseError) {
-          console.error("Fallback file corrupted. Creating backup and reinitializing...");
+        } catch (e) {
           await writeFile(`${TEMP_FILE_PATH}.bak.${Date.now()}`, fileContent);
           tempData = [];
         }
@@ -176,7 +161,8 @@ const InspectionService = {
     const remaining = [];
 
     for (const entry of tempData) {
-      const check = await redisClient.get(`inspection:${entry.vin}`);
+      // const check = await redisClient.get(`inspection:${entry.vin}`);
+      const check = await redisClient.get(`inspection:${entry.inspect_id}`);
       if (check) continue;
 
       const result = await this.createInspection(entry);
@@ -188,271 +174,468 @@ const InspectionService = {
     } else {
       await unlinkFile(TEMP_FILE_PATH);
     }
-  },
-  // async updateInspection(id, data) {
-  //   try {
-  //     console.log(id)
-  //     console.log(data)
-  //     await validationSchema.validate(data, { abortEarly: false });
-
-  //     const existingInspection = await UserInspection.findById(id);
-  //     if (!existingInspection) {
-  //       return { success: false, message: "Inspection not found." };
-  //     }
-
-  //     // Update fields
-  //     existingInspection.vehicle_vin = data.vin || existingInspection.vehicle_vin;
-  //     existingInspection.updated_at = new Date();
-
-  //     await existingInspection.save();
-
-  //     const imageDocs = [];
-
-  //     const base_url = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
-
-  //     for (let i = 0; i < data.images.length; i++) {
-  //       const img = data.images[i];
-  //       if (!img?.buffer) continue;
-
-  //       const fileName = `${uuidv4()}.jpg`;
-  //       const imgKey = `inspections/${existingInspection._id}/${fileName}`;
-  //       const uploadCommand = new PutObjectCommand({
-  //         Bucket: process.env.AWS_BUCKET_NAME,
-  //         Key: imgKey,
-  //         Body: img.buffer,
-  //         ContentType: "image/jpg",
-  //         ACL: "public-read"
-  //       });
-
-  //       await s3.send(uploadCommand);
-
-  //       imageDocs.push({
-  //         id: i + 1,
-  //         user_inspection_id: existingInspection.id,
-  //         image_title: img?.title || null,
-  //         image_type: img?.type ?? null,
-  //         image_src: imgKey,
-  //         created_at: new Date(),
-  //         updated_at: new Date()
-  //       });
-  //     }
-
-  //     if (imageDocs.length > 0) {
-  //       await UserInspectionImage.deleteMany({ user_inspection_id: existingInspection.id });
-  //       await UserInspectionImage.insertMany(imageDocs);
-  //     }
-
-  //     await redisClient.set(`inspection:${data.vin}`, JSON.stringify({ success: true }));
-
-  //     return {
-  //       success: true,
-  //       message: "Inspection updated successfully",
-  //       inspection_id: existingInspection._id,
-  //       base_url,
-  //       uploaded_images: imageDocs.map(doc => ({
-  //         id: doc.id,
-  //         title: doc.image_title,
-  //         type: doc.image_type,
-  //         url: `${base_url}${doc.image_src}`,
-  //       }))
-  //     };
-
-  //   } catch (error) {
-  //     console.error("Update Service Error:", error);
-  //     return { success: false, message: "Failed to update inspection. Please try again." };
-  //   }
-  // },
-  // async updateInspection(id, data) {
-  //   try {
-  //     console.log(id);
-  //     console.log(data);
-  
-  //     await validationSchema.validate(data, { abortEarly: false });
-  
-  //     const existingInspection = await UserInspection.findById(id);
-  //     if (!existingInspection) {
-  //       return { success: false, message: "Inspection not found." };
-  //     }
-  
-  //     // Update all allowed fields
-  //     const updatableFields = [
-  //       "status", "is_paid", "vehicle_year", "vehicle_make", "vehicle_model",
-  //       "vin", "vehicle_plate_no", "build_date", "comp_date", "no_of_keys",
-  //       "servicebook_present", "servicehistory_present", "last_service_date",
-  //       "registration_expiry", "last_mileage", "front_wheel_d", "rear_wheel_d",
-  //       "cond_front_left", "cond_front_right", "cond_rear_right", "cond_rear_left",
-  //       "cond_spare", "transmission", "body_type", "odometer", "fuel_type",
-  //       "drive_train", "color", "road_test", "road_test_comments",
-  //       "general_comments", "is_pdf_generated", "is_locked", "locked_by",
-  //       "approved_by", "approved_on", "report_date", "inspector_notes", "page_status"
-  //     ];
-  
-  //     updatableFields.forEach(field => {
-  //       if (data[field] !== undefined) {
-  //         existingInspection[field === "vin" ? "vehicle_vin" : field] = data[field];
-  //       }
-  //     });
-  
-  //     existingInspection.updated_at = new Date();
-  //     await existingInspection.save();
-  
-  //     const base_url = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
-  
-  //     const imageDocs = [];
-  
-  //     if (Array.isArray(data.images) && data.images.length > 0) {
-  //       for (let i = 0; i < data.images.length; i++) {
-  //         const img = data.images[i];
-  //         if (!img?.buffer) continue;
-  
-  //         const fileName = `${uuidv4()}.jpg`;
-  //         const imgKey = `inspections/${existingInspection._id}/${fileName}`;
-  //         const uploadCommand = new PutObjectCommand({
-  //           Bucket: process.env.AWS_BUCKET_NAME,
-  //           Key: imgKey,
-  //           Body: img.buffer,
-  //           ContentType: "image/jpg",
-  //           ACL: "public-read"
-  //         });
-  
-  //         await s3.send(uploadCommand);
-  
-  //         imageDocs.push({
-  //           id: i + 1,
-  //           user_inspection_id: existingInspection.id,
-  //           image_title: img?.title || null,
-  //           image_type: img?.type ?? null,
-  //           image_src: imgKey,
-  //           created_at: new Date(),
-  //           updated_at: new Date()
-  //         });
-  //       }
-  
-  //       await UserInspectionImage.deleteMany({ user_inspection_id: existingInspection.id });
-  //       await UserInspectionImage.insertMany(imageDocs);
-  //     }
-  
-  //     await redisClient.set(`inspection:${data.vin}`, JSON.stringify({ success: true }));
-  
-  //     return {
-  //       success: true,
-  //       message: "Inspection updated successfully",
-  //       inspection_id: existingInspection._id,
-  //       base_url,
-  //       uploaded_images: imageDocs.map(doc => ({
-  //         id: doc.id,
-  //         title: doc.image_title,
-  //         type: doc.image_type,
-  //         url: `${base_url}${doc.image_src}`,
-  //       }))
-  //     };
-  //   } catch (error) {
-  //     console.error("Update Service Error:", error);
-  //     return { success: false, message: "Failed to update inspection. Please try again." };
-  //   }
-  // }
-
-  async updateInspection(inspect_id, data) {
-    try {
-      console.log(inspect_id);
-      console.log(data);
-  
-      await validationSchema.validate(data, { abortEarly: false });
-  
-      const existingInspection = await UserInspection.findOne({ inspect_id });
-      if (!existingInspection) {
-        return { success: false, message: "Inspection not found." };
-      }
-  
-      const updatableFields = [
-        "status", "is_paid", "vehicle_year", "vehicle_make", "vehicle_model",
-        "vin", "vehicle_plate_no", "build_date", "comp_date", "no_of_keys",
-        "servicebook_present", "servicehistory_present", "last_service_date",
-        "registration_expiry", "last_mileage", "front_wheel_d", "rear_wheel_d",
-        "cond_front_left", "cond_front_right", "cond_rear_right", "cond_rear_left",
-        "cond_spare", "transmission", "body_type", "odometer", "fuel_type",
-        "drive_train", "color", "road_test", "road_test_comments",
-        "general_comments", "is_pdf_generated", "is_locked", "locked_by",
-        "approved_by", "approved_on", "report_date", "inspector_notes", "page_status"
-      ];
-  
-      // Update only changed fields
-      updatableFields.forEach(field => {
-        if (data[field] !== undefined) {
-          existingInspection[field === "vin" ? "vehicle_vin" : field] = data[field];
-        }
-      });
-  
-      existingInspection.updated_at = new Date();
-      await existingInspection.save();
-  
-      const base_url = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
-      const imageDocs = [];
-  
-      if (Array.isArray(data.images) && data.images.length > 0) {
-        for (let i = 0; i < data.images.length; i++) {
-          const img = data.images[i];
-          if (!img?.buffer) continue;
-  
-          const fileName = `${uuidv4()}.jpg`;
-          const imgKey = `inspections/${inspect_id}/${fileName}`;
-          const uploadCommand = new PutObjectCommand({
-            Bucket: process.env.AWS_BUCKET_NAME,
-            Key: imgKey,
-            Body: img.buffer,
-            ContentType: "image/jpg",
-            ACL: "public-read"
-          });
-  
-          await s3.send(uploadCommand);
-  
-          const existingImage = await UserInspectionImage.findOne({
-            user_inspection_id: inspect_id,
-            image_type: img?.type ?? null,
-          });
-  
-          if (existingImage) {
-            existingImage.image_title = img?.title || existingImage.image_title;
-            existingImage.image_src = imgKey;
-            existingImage.updated_at = new Date();
-            await existingImage.save();
-            imageDocs.push(existingImage);
-          } else {
-            const newImage = new UserInspectionImage({
-              user_inspection_id: inspect_id,
-              image_title: img?.title || null,
-              image_type: img?.type ?? null,
-              image_src: imgKey,
-              created_at: new Date(),
-              updated_at: new Date(),
-            });
-            await newImage.save();
-            imageDocs.push(newImage);
-          }
-        }
-      }
-  
-      await redisClient.set(`inspection:${data.vin}`, JSON.stringify({ success: true }));
-  
-      return {
-        success: true,
-        message: "Inspection updated successfully",
-        inspection_id: inspect_id,
-        base_url,
-        uploaded_images: imageDocs.map(doc => ({
-          id: doc._id,
-          title: doc.image_title,
-          type: doc.image_type,
-          url: `${base_url}${doc.image_src}`,
-        }))
-      };
-    } catch (error) {
-      console.error("Update Service Error:", error);
-      return { success: false, message: "Failed to update inspection. Please try again." };
-    }
   }
-  
-  
 };
 
 module.exports = InspectionService;
+// // Service/Inspection.js
+
+// // Service/Inspection.js
+// const fs = require("fs");
+// const path = require("path");
+// const util = require("util");
+// const yup = require("yup");
+// const { v4: uuidv4 } = require("uuid");
+// const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+// const UserInspection = require("../Schema/Inspections/UserInspectionSchema");
+// const UserInspectionImage = require("../Schema/Inspections/UserInspectionImageSchema");
+// const { redisClient } = require("../Database/Redisconnection");
+// require("dotenv").config({ path: path.resolve(__dirname, '../.env') });
+
+// const s3 = new S3Client({
+//   region: process.env.AWS_REGION,
+//   credentials: {
+//     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+//     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+//   }
+// });
+
+// const writeFile = util.promisify(fs.writeFile);
+// const unlinkFile = util.promisify(fs.unlink);
+// const readFile = util.promisify(fs.readFile);
+// const TEMP_FILE_PATH = path.join(__dirname, "../temp/failed_inspections.json");
+
+// const validationSchema = yup.object().shape({
+//   user_id: yup.number().required(),
+//   vin: yup.string().required(),
+//   images: yup.array().of(
+//     yup.object().shape({
+//       title: yup.string(),
+//       type: yup.boolean(),
+//       buffer: yup.mixed()
+//     })
+//   )
+// });
+
+// const InspectionService = {
+//   async createInspection(data) {
+//     try {
+//       // await validationSchema.validate(data, { abortEarly: false });
+//       console.log("data",data)
+//       const inspection = new UserInspection({
+//         user_id: data.user_id,
+//         inspect_id: uuidv4(),
+//         status: data.status ?? true,
+//         is_paid: data.is_paid ?? false,
+//         vehicle_year: data.vehicle_year,
+//         vehicle_make: data.vehicle_make,
+//         vehicle_model: data.vehicle_model,
+//         vehicle_vin: data.vin,
+//         vehicle_plate_no: data.vehicle_plate_no,
+//         build_date: data.build_date,
+//         comp_date: data.comp_date,
+//         no_of_keys: data.no_of_keys ?? true,
+//         servicebook_present: data.servicebook_present,
+//         servicehistory_present: data.servicehistory_present,
+//         last_service_date: data.last_service_date,
+//         registration_expiry: data.registration_expiry,
+//         last_mileage: data.last_mileage,
+//         front_wheel_d: data.front_wheel_d,
+//         rear_wheel_d: data.rear_wheel_d,
+//         cond_front_left: data.cond_front_left,
+//         cond_front_right: data.cond_front_right,
+//         cond_rear_right: data.cond_rear_right,
+//         cond_rear_left: data.cond_rear_left,
+//         cond_spare: data.cond_spare,
+//         transmission: data.transmission,
+//         body_type: data.body_type,
+//         odometer: data.odometer,
+//         fuel_type: data.fuel_type,
+//         drive_train: data.drive_train,
+//         color: data.color,
+//         road_test: data.road_test,
+//         road_test_comments: data.road_test_comments,
+//         general_comments: data.general_comments,
+//         is_pdf_generated: data.is_pdf_generated ?? false,
+//         is_locked: data.is_locked ?? false,
+//         locked_by: data.locked_by,
+//         approved_by: data.approved_by,
+//         approved_on: data.approved_on,
+//         report_date: data.report_date,
+//         inspector_notes: data.inspector_notes,
+//         created_at: new Date(),
+//         updated_at: new Date(),
+//         deleted_at: data.deleted_at,
+//         page_status: data.page_status ?? false
+//       });
+      
+//       console.log(inspection)
+
+//       const savedInspection = await inspection.save();
+
+//       const imageDocs = [];
+
+//       const base_url = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
+
+//       for (let i = 0; i < data.images.length; i++) {
+//         const img = data.images[i];
+//         let imgKey = null;
+
+//         if (img?.buffer) {
+//           const fileName = `${uuidv4()}.jpg`;
+//           imgKey = `inspections/${savedInspection._id}/${fileName}`;
+//           const uploadCommand = new PutObjectCommand({
+//             Bucket: process.env.AWS_BUCKET_NAME,
+//             Key: imgKey,
+//             Body: img.buffer,
+//             ContentType: "image/jpg",
+//             ACL: "public-read"
+//           });
+//           await s3.send(uploadCommand);
+//         }
+
+//         imageDocs.push({
+//           id: i + 1,
+//           user_inspection_id: savedInspection.inspect_id,
+//           image_title: img?.title || null,
+//           image_type: img?.type ?? null,
+//           image_src: imgKey,
+//           created_at: new Date(),
+//           updated_at: new Date()
+//         });
+//       }
+
+//       await UserInspectionImage.insertMany(imageDocs);
+
+//       await redisClient.set(`inspection:${data.vin}`, JSON.stringify({ success: true }));
+
+//       return {
+//         success: true,
+//         message: "You will be notified shortly",
+//         inspection_id: savedInspection._id,
+//         base_url,
+//         uploaded_images: imageDocs.map(doc => ({
+//           id: doc.id,
+//           title: doc.image_title,
+//           type: doc.image_type,
+//           url: doc.image_src ? `${base_url}${doc.image_src}` : null,
+//         }))
+//       };
+
+//     } catch (error) {
+//       console.error("Service Error:", error);
+//       const fallbackData = {
+//         ...data,
+//         time: new Date().toISOString(),
+//       };
+
+//       let tempData = [];
+//       if (fs.existsSync(TEMP_FILE_PATH)) {
+//         const fileContent = await readFile(TEMP_FILE_PATH, "utf8");
+//         try {
+//           tempData = JSON.parse(fileContent || "[]");
+//         } catch (parseError) {
+//           console.error("Fallback file corrupted. Creating backup and reinitializing...");
+//           await writeFile(`${TEMP_FILE_PATH}.bak.${Date.now()}`, fileContent);
+//           tempData = [];
+//         }
+//       }
+
+//       tempData.push(fallbackData);
+//       await writeFile(TEMP_FILE_PATH, JSON.stringify(tempData, null, 2));
+
+//       return { success: false, message: "Data saved temporarily. Will retry soon." };
+//     }
+//   },
+
+//   async retryFailedInsertions() {
+//     if (!fs.existsSync(TEMP_FILE_PATH)) return;
+
+//     const fileContent = await readFile(TEMP_FILE_PATH, "utf8");
+//     const tempData = JSON.parse(fileContent);
+//     const remaining = [];
+
+//     for (const entry of tempData) {
+//       const check = await redisClient.get(`inspection:${entry.vin}`);
+//       if (check) continue;
+
+//       const result = await this.createInspection(entry);
+//       if (!result.success) remaining.push(entry);
+//     }
+
+//     if (remaining.length > 0) {
+//       await writeFile(TEMP_FILE_PATH, JSON.stringify(remaining, null, 2));
+//     } else {
+//       await unlinkFile(TEMP_FILE_PATH);
+//     }
+//   },
+//   // async updateInspection(id, data) {
+//   //   try {
+//   //     console.log(id)
+//   //     console.log(data)
+//   //     await validationSchema.validate(data, { abortEarly: false });
+
+//   //     const existingInspection = await UserInspection.findById(id);
+//   //     if (!existingInspection) {
+//   //       return { success: false, message: "Inspection not found." };
+//   //     }
+
+//   //     // Update fields
+//   //     existingInspection.vehicle_vin = data.vin || existingInspection.vehicle_vin;
+//   //     existingInspection.updated_at = new Date();
+
+//   //     await existingInspection.save();
+
+//   //     const imageDocs = [];
+
+//   //     const base_url = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
+
+//   //     for (let i = 0; i < data.images.length; i++) {
+//   //       const img = data.images[i];
+//   //       if (!img?.buffer) continue;
+
+//   //       const fileName = `${uuidv4()}.jpg`;
+//   //       const imgKey = `inspections/${existingInspection._id}/${fileName}`;
+//   //       const uploadCommand = new PutObjectCommand({
+//   //         Bucket: process.env.AWS_BUCKET_NAME,
+//   //         Key: imgKey,
+//   //         Body: img.buffer,
+//   //         ContentType: "image/jpg",
+//   //         ACL: "public-read"
+//   //       });
+
+//   //       await s3.send(uploadCommand);
+
+//   //       imageDocs.push({
+//   //         id: i + 1,
+//   //         user_inspection_id: existingInspection.id,
+//   //         image_title: img?.title || null,
+//   //         image_type: img?.type ?? null,
+//   //         image_src: imgKey,
+//   //         created_at: new Date(),
+//   //         updated_at: new Date()
+//   //       });
+//   //     }
+
+//   //     if (imageDocs.length > 0) {
+//   //       await UserInspectionImage.deleteMany({ user_inspection_id: existingInspection.id });
+//   //       await UserInspectionImage.insertMany(imageDocs);
+//   //     }
+
+//   //     await redisClient.set(`inspection:${data.vin}`, JSON.stringify({ success: true }));
+
+//   //     return {
+//   //       success: true,
+//   //       message: "Inspection updated successfully",
+//   //       inspection_id: existingInspection._id,
+//   //       base_url,
+//   //       uploaded_images: imageDocs.map(doc => ({
+//   //         id: doc.id,
+//   //         title: doc.image_title,
+//   //         type: doc.image_type,
+//   //         url: `${base_url}${doc.image_src}`,
+//   //       }))
+//   //     };
+
+//   //   } catch (error) {
+//   //     console.error("Update Service Error:", error);
+//   //     return { success: false, message: "Failed to update inspection. Please try again." };
+//   //   }
+//   // },
+//   // async updateInspection(id, data) {
+//   //   try {
+//   //     console.log(id);
+//   //     console.log(data);
+  
+//   //     await validationSchema.validate(data, { abortEarly: false });
+  
+//   //     const existingInspection = await UserInspection.findById(id);
+//   //     if (!existingInspection) {
+//   //       return { success: false, message: "Inspection not found." };
+//   //     }
+  
+//   //     // Update all allowed fields
+//   //     const updatableFields = [
+//   //       "status", "is_paid", "vehicle_year", "vehicle_make", "vehicle_model",
+//   //       "vin", "vehicle_plate_no", "build_date", "comp_date", "no_of_keys",
+//   //       "servicebook_present", "servicehistory_present", "last_service_date",
+//   //       "registration_expiry", "last_mileage", "front_wheel_d", "rear_wheel_d",
+//   //       "cond_front_left", "cond_front_right", "cond_rear_right", "cond_rear_left",
+//   //       "cond_spare", "transmission", "body_type", "odometer", "fuel_type",
+//   //       "drive_train", "color", "road_test", "road_test_comments",
+//   //       "general_comments", "is_pdf_generated", "is_locked", "locked_by",
+//   //       "approved_by", "approved_on", "report_date", "inspector_notes", "page_status"
+//   //     ];
+  
+//   //     updatableFields.forEach(field => {
+//   //       if (data[field] !== undefined) {
+//   //         existingInspection[field === "vin" ? "vehicle_vin" : field] = data[field];
+//   //       }
+//   //     });
+  
+//   //     existingInspection.updated_at = new Date();
+//   //     await existingInspection.save();
+  
+//   //     const base_url = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
+  
+//   //     const imageDocs = [];
+  
+//   //     if (Array.isArray(data.images) && data.images.length > 0) {
+//   //       for (let i = 0; i < data.images.length; i++) {
+//   //         const img = data.images[i];
+//   //         if (!img?.buffer) continue;
+  
+//   //         const fileName = `${uuidv4()}.jpg`;
+//   //         const imgKey = `inspections/${existingInspection._id}/${fileName}`;
+//   //         const uploadCommand = new PutObjectCommand({
+//   //           Bucket: process.env.AWS_BUCKET_NAME,
+//   //           Key: imgKey,
+//   //           Body: img.buffer,
+//   //           ContentType: "image/jpg",
+//   //           ACL: "public-read"
+//   //         });
+  
+//   //         await s3.send(uploadCommand);
+  
+//   //         imageDocs.push({
+//   //           id: i + 1,
+//   //           user_inspection_id: existingInspection.id,
+//   //           image_title: img?.title || null,
+//   //           image_type: img?.type ?? null,
+//   //           image_src: imgKey,
+//   //           created_at: new Date(),
+//   //           updated_at: new Date()
+//   //         });
+//   //       }
+  
+//   //       await UserInspectionImage.deleteMany({ user_inspection_id: existingInspection.id });
+//   //       await UserInspectionImage.insertMany(imageDocs);
+//   //     }
+  
+//   //     await redisClient.set(`inspection:${data.vin}`, JSON.stringify({ success: true }));
+  
+//   //     return {
+//   //       success: true,
+//   //       message: "Inspection updated successfully",
+//   //       inspection_id: existingInspection._id,
+//   //       base_url,
+//   //       uploaded_images: imageDocs.map(doc => ({
+//   //         id: doc.id,
+//   //         title: doc.image_title,
+//   //         type: doc.image_type,
+//   //         url: `${base_url}${doc.image_src}`,
+//   //       }))
+//   //     };
+//   //   } catch (error) {
+//   //     console.error("Update Service Error:", error);
+//   //     return { success: false, message: "Failed to update inspection. Please try again." };
+//   //   }
+//   // }
+
+//   async updateInspection(inspect_id, data) {
+//     try {
+//       console.log(inspect_id);
+//       console.log(data);
+  
+//       await validationSchema.validate(data, { abortEarly: false });
+  
+//       const existingInspection = await UserInspection.findOne({ inspect_id });
+//       if (!existingInspection) {
+//         return { success: false, message: "Inspection not found." };
+//       }
+  
+//       const updatableFields = [
+//         "status", "is_paid", "vehicle_year", "vehicle_make", "vehicle_model",
+//         "vin", "vehicle_plate_no", "build_date", "comp_date", "no_of_keys",
+//         "servicebook_present", "servicehistory_present", "last_service_date",
+//         "registration_expiry", "last_mileage", "front_wheel_d", "rear_wheel_d",
+//         "cond_front_left", "cond_front_right", "cond_rear_right", "cond_rear_left",
+//         "cond_spare", "transmission", "body_type", "odometer", "fuel_type",
+//         "drive_train", "color", "road_test", "road_test_comments",
+//         "general_comments", "is_pdf_generated", "is_locked", "locked_by",
+//         "approved_by", "approved_on", "report_date", "inspector_notes", "page_status"
+//       ];
+  
+//       // Update only changed fields
+//       updatableFields.forEach(field => {
+//         if (data[field] !== undefined) {
+//           existingInspection[field === "vin" ? "vehicle_vin" : field] = data[field];
+//         }
+//       });
+  
+//       existingInspection.updated_at = new Date();
+//       await existingInspection.save();
+  
+//       const base_url = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
+//       const imageDocs = [];
+  
+//       if (Array.isArray(data.images) && data.images.length > 0) {
+//         for (let i = 0; i < data.images.length; i++) {
+//           const img = data.images[i];
+//           if (!img?.buffer) continue;
+  
+//           const fileName = `${uuidv4()}.jpg`;
+//           const imgKey = `inspections/${inspect_id}/${fileName}`;
+//           const uploadCommand = new PutObjectCommand({
+//             Bucket: process.env.AWS_BUCKET_NAME,
+//             Key: imgKey,
+//             Body: img.buffer,
+//             ContentType: "image/jpg",
+//             ACL: "public-read"
+//           });
+  
+//           await s3.send(uploadCommand);
+  
+//           const existingImage = await UserInspectionImage.findOne({
+//             user_inspection_id: inspect_id,
+//             image_type: img?.type ?? null,
+//           });
+  
+//           if (existingImage) {
+//             existingImage.image_title = img?.title || existingImage.image_title;
+//             existingImage.image_src = imgKey;
+//             existingImage.updated_at = new Date();
+//             await existingImage.save();
+//             imageDocs.push(existingImage);
+//           } else {
+//             const newImage = new UserInspectionImage({
+//               user_inspection_id: inspect_id,
+//               image_title: img?.title || null,
+//               image_type: img?.type ?? null,
+//               image_src: imgKey,
+//               created_at: new Date(),
+//               updated_at: new Date(),
+//             });
+//             await newImage.save();
+//             imageDocs.push(newImage);
+//           }
+//         }
+//       }
+  
+//       await redisClient.set(`inspection:${data.vin}`, JSON.stringify({ success: true }));
+  
+//       return {
+//         success: true,
+//         message: "Inspection updated successfully",
+//         inspection_id: inspect_id,
+//         base_url,
+//         uploaded_images: imageDocs.map(doc => ({
+//           id: doc._id,
+//           title: doc.image_title,
+//           type: doc.image_type,
+//           url: `${base_url}${doc.image_src}`,
+//         }))
+//       };
+//     } catch (error) {
+//       console.error("Update Service Error:", error);
+//       return { success: false, message: "Failed to update inspection. Please try again." };
+//     }
+//   }
+  
+  
+// };
+
+// module.exports = InspectionService;
+
+
+

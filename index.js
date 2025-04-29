@@ -1,5 +1,5 @@
 const express = require("express");
-require("./Database/DatabaseConnecttion");
+// require("./Database/DatabaseConnecttion");
 const app = express();
 const port = 5000;
 const morgan = require("morgan");
