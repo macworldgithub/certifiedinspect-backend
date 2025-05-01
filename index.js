@@ -25,15 +25,15 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use(morgan("dev"));
 
-app.use("/v1/auth", auth);
+// app.use("/v1/auth", auth);
 
 app.use('/v1/inspection', inspectionRoutes);
 
-cron.schedule("*/2 * * * *", async () => {
-  console.log("Retrying failed inspections...");
-  await InspectionService.retryFailedInsertions();
-});
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+// cron.schedule("*/2 * * * *", async () => {
+//   console.log("Retrying failed inspections...");
+//   await InspectionService.retryFailedInsertions();
+// });
+// app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.listen(port, () => {
   console.log(`Server is running at ${port}`);
