@@ -6,9 +6,9 @@ const InspectionService = require("../Services/inspection");
 
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
-router.post("/submit", upload.array("images", 17), async (req, res) => {
+router.post("/submit", upload.array("images", 19), async (req, res) => {
   try {
-    const images = Array.from({ length: 17 }).map((_, i) => {
+    const images = Array.from({ length: 19 }).map((_, i) => {
       const file = req.files[i];
       const title = req.body[`title_${i}`];
       const type = req.body[`type_${i}`];
